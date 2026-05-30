@@ -25,13 +25,7 @@ static PyObject *map_cache_live_count_py(
     return PyLong_FromLong(live);
 }
 
-// Forward declare so vec_prepare_log_py can call it before env_binding.h's
-// unpack_vecenv definition is visible; the definition lives in drive.h.
 static void prepare_log(Drive *env);
-
-// Drain each env's per-agent log buffers into env->log so the subsequent
-// vec_log call sees a per-agent-mean-weighted aggregate. Must be called
-// once per intended vec_log emission.
 static PyObject *vec_prepare_log_py(PyObject *self __attribute__((unused)), PyObject *args);
 
 // clang-format off
