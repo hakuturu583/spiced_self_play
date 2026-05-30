@@ -455,18 +455,11 @@ struct Drive {
     int completed_episodes_count;
     CompletedEpisodeSummary completed_episodes[COMPLETED_EPISODE_QUEUE_CAPACITY];
 
-    // Per-agent EMA of completed-episode Log values. Each slot holds one
-    // agent's smoothed estimate, updated on every termination of that agent's
-    // episode as slot = alpha*slot + (1 - alpha)*new_episode_log, with the
-    // very first completion seeding the slot directly. prepare_log emits the
-    // population mean across slots flagged has_data, so every agent that has
-    // ever completed an episode contributes equal weight to the cross-agent
-    // metric regardless of completion frequency. log_ema_alpha is the
-    // smoothing coefficient (0 = use latest only, 1 = never update).
+    // Per-agent EMA state, one slot per active controllable agent. Allocated
+    // in init() once active_agent_count is known.
     Log *per_agent_log_ema;
-    int *per_agent_log_count; // lifetime count of completed episodes per slot
-    int *per_agent_has_data;  // 1 once this slot has been seeded by a first completion
-    int per_agent_log_capacity;
+    int *per_agent_log_count;
+    int *per_agent_has_data;
     float log_ema_alpha;
 };
 
@@ -2586,37 +2579,14 @@ static float calculate_puffer_score(Log *log_agent, float duration_steps, float 
     return log_agent->puffer_score;
 }
 
-// Grow-only per-agent log buffer. Active slot count can vary across c_reset
-// (REPLAY scenarios with different agent populations); we never shrink so
-// EMA state from prior windows survives.
-static void ensure_per_agent_log_capacity(Drive *env, int needed) {
-    if (env->per_agent_log_capacity >= needed) {
-        return;
-    }
-    int old_cap = env->per_agent_log_capacity;
-    env->per_agent_log_ema = (Log *) realloc(env->per_agent_log_ema, needed * sizeof(Log));
-    env->per_agent_log_count = (int *) realloc(env->per_agent_log_count, needed * sizeof(int));
-    env->per_agent_has_data = (int *) realloc(env->per_agent_has_data, needed * sizeof(int));
-    memset(&env->per_agent_log_ema[old_cap], 0, (needed - old_cap) * sizeof(Log));
-    memset(&env->per_agent_log_count[old_cap], 0, (needed - old_cap) * sizeof(int));
-    memset(&env->per_agent_has_data[old_cap], 0, (needed - old_cap) * sizeof(int));
-    env->per_agent_log_capacity = needed;
-}
-
-// Emit the cross-agent population mean: sum each agent's current EMA into
-// env->log, divide later in vec_log by env->log.n (count of agents that have
-// ever completed at least one episode). Per-agent EMA state is preserved
-// across emissions so frequent completers do not dominate the long-run
-// signal -- their slot simply tracks the smoothed estimate alongside everyone
-// else.
+// Sum each agent's current EMA slot into env->log and set env->log.n to the
+// number of slots that have ever been seeded. vec_log divides by aggregate.n
+// downstream to produce the cross-agent mean.
 static void prepare_log(Drive *env) {
     memset(&env->log, 0, sizeof(Log));
-    if (env->per_agent_log_capacity == 0) {
-        return;
-    }
     int num_keys = sizeof(Log) / sizeof(float);
     int num_with_data = 0;
-    for (int a = 0; a < env->per_agent_log_capacity; a++) {
+    for (int a = 0; a < env->active_agent_count; a++) {
         if (!env->per_agent_has_data[a]) {
             continue;
         }
@@ -2632,7 +2602,6 @@ static void prepare_log(Drive *env) {
 
 static void add_log(Drive *env) {
     int safe_timestep = (env->timestep > 0) ? env->timestep : 1;
-    ensure_per_agent_log_capacity(env, env->active_agent_count);
     float alpha = env->log_ema_alpha;
     float one_minus_alpha = 1.0f - alpha;
     int num_log_keys = sizeof(Log) / sizeof(float);
@@ -2643,10 +2612,6 @@ static void add_log(Drive *env) {
         reference_progress_distance = fmaxf(reference_progress_distance, 1.0f);
         env->logs[i].progress_ratio = agent->distance_since_spawn / reference_progress_distance;
 
-        // Build a fresh per-episode Log snapshot. All field writes below are
-        // direct assignments (no accumulation): the snapshot represents this
-        // single completed episode in canonical units. We then either seed
-        // the agent's slot (first completion) or EMA-blend into it.
         Log episode_log = {0};
 
         int offroad = env->logs[i].offroad_rate;
@@ -2727,9 +2692,6 @@ static void add_log(Drive *env) {
             episode_log.puffer_score = env->logs[i].puffer_score;
         }
 
-        // Env-level composition counts: snapshot per agent so the per-agent
-        // EMA tracks the env's value (constant within a scenario) and the
-        // cross-agent mean gives a population-weighted view.
         episode_log.expert_static_car_count = env->expert_static_agent_count;
         episode_log.static_car_count = env->static_agent_count;
 
@@ -3603,7 +3565,6 @@ void init(Drive *env) {
     env->per_agent_log_ema = NULL;
     env->per_agent_log_count = NULL;
     env->per_agent_has_data = NULL;
-    env->per_agent_log_capacity = 0;
 
     struct SharedMapData *shared = env->use_map_cache ? map_cache_lookup(env->map_name) : NULL;
     if (shared != NULL) {
@@ -3653,6 +3614,10 @@ void init(Drive *env) {
     env->logs_capacity = 0;
     set_active_agents(env);
     env->logs_capacity = env->active_agent_count;
+
+    env->per_agent_log_ema = (Log *) calloc(env->active_agent_count, sizeof(Log));
+    env->per_agent_log_count = (int *) calloc(env->active_agent_count, sizeof(int));
+    env->per_agent_has_data = (int *) calloc(env->active_agent_count, sizeof(int));
     if (env->simulation_mode == SIMULATION_REPLAY) {
         remove_bad_trajectories(env);
     }
