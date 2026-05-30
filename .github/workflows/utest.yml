@@ -62,6 +62,7 @@ jobs:
           pip install pytest
           python -m pytest -v \
             tests/test_drive_map_types.py \
+            tests/test_drive_per_agent_logging.py \
             tests/test_drive_scenario_length.py \
             tests/test_eval_manager.py \
             tests/test_validation_replay_html.py \
@@ -69,3 +70,8 @@ jobs:
             pufferlib/ocean/benchmark/test_map_metrics.py \
             pufferlib/ocean/benchmark/test_road_edges.py \
             pufferlib/ocean/benchmark/test_ttc.py
+
+      - name: Run drive training smoke
+        env:
+          PUFFER_CPU: 1
+        run: python -m pytest -v tests/test_drive_train.py

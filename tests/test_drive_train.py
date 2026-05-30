@@ -7,6 +7,7 @@ Runs a 10s training session to verify the end-to-end setup works.
 import os
 import sys
 import time
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,7 +20,10 @@ def test_drive_training():
 
     try:
         env_name = "puffer_drive"
-        args = load_config(env_name)
+        # load_config reads sys.argv; under pytest that holds pytest's own flags
+        # which pufferl's argparser rejects with SystemExit(2). Strip it down.
+        with patch.object(sys, "argv", ["pufferl.py"]):
+            args = load_config(env_name)
 
         args["train"].update(
             {
