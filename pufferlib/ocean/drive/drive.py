@@ -74,6 +74,7 @@ class Drive(pufferlib.PufferEnv):
         init_step=0,
         eval_mode=0,
         num_eval_scenarios=16,
+        log_ema_alpha=0.95,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir=None,
@@ -167,6 +168,7 @@ class Drive(pufferlib.PufferEnv):
             raise ValueError(f"dynamics_model must be 'classic' or 'jerk'. Got: {dynamics_model}")
         self.eval_mode = eval_mode
         self.num_eval_scenarios = num_eval_scenarios
+        self.log_ema_alpha = log_ema_alpha
         self.termination_mode = termination_mode
         self.inactive_agent_threshold = inactive_agent_threshold
         self.rng = np.random.default_rng(seed)
@@ -415,6 +417,7 @@ class Drive(pufferlib.PufferEnv):
             "reward_randomization": self.reward_randomization,
             "compute_eval_metrics": self.compute_eval_metrics,
             "eval_mode": self.eval_mode,
+            "log_ema_alpha": self.log_ema_alpha,
             "obs_norm_goal_offset_m": self.obs_norm_goal_offset_m,
             "obs_norm_xy_offset_m": self.obs_norm_xy_offset_m,
             "obs_norm_veh_length_m": self.obs_norm_veh_length_m,
