@@ -758,13 +758,9 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
         PyObject *dict = PyDict_New();
 
-        // Emit whenever any env has data. With Drive's per-agent prepare_log
-        // path, aggregate.n is the cross-env count of agents that contributed
-        // a window-mean (not completed-episode count), so the meaningful gate
-        // is "at least one contribution." Other ocean envs that don't run
-        // prepare_log retain completed-episode-count semantics and now emit
-        // smaller batches more often — the Python-side mean_and_log
-        // (pufferl.py) re-averages across emissions in its rate-limit window.
+        // aggregate.n is the divisor for every field below; skip the emission
+        // when no env has contributed any data (n=0 would divide by zero and
+        // the dict would carry no signal anyway).
         if (aggregate.n < 1) {
             return dict;
         }
