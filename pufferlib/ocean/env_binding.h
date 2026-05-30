@@ -704,8 +704,6 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
     // Iterates over logs one float at a time. Will break
     // horribly if Log has non-float data.
-    PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
-    (void) num_agents_arg; // Kept for caller-API compatibility; gate is now aggregate.n < 1.
     int num_keys = sizeof(Log) / sizeof(float);
 
     Env *env = vec->envs[0];
