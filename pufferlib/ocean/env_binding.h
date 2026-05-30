@@ -709,32 +709,25 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     Env *env = vec->envs[0];
     if (env->eval_mode) {
         PyObject *list = PyList_New(vec->num_envs);
-        PyObject *dict = PyDict_New();
 
-        if (env->log.n == 0) {
-            return dict;
-        }
-
-        // Got enough data. Reset logs and return metrics
         for (int i = 0; i < vec->num_envs; i++) {
             PyObject *dict = PyDict_New();
-            Env *env = vec->envs[i];
-            float n = env->log.n;
-            // Average across agents
-            for (int i = 0; i < num_keys; i++) {
-                ((float *) &env->log)[i] /= n;
-            }
-            my_log(dict, env, &env->log, n);
-            assign_to_dict(dict, "n", n);
-            // Add map_name to dict
-            if (env->map_name) {
-                PyObject *s = PyUnicode_FromString(env->map_name);
-                if (s != NULL) {
-                    PyDict_SetItemString(dict, "map_name", s);
-                    Py_DECREF(s);
+            Env *env_i = vec->envs[i];
+            float n = env_i->log.n;
+            if (n > 0) {
+                for (int j = 0; j < num_keys; j++) {
+                    ((float *) &env_i->log)[j] /= n;
+                }
+                my_log(dict, env_i, &env_i->log, n);
+                assign_to_dict(dict, "n", n);
+                if (env_i->map_name) {
+                    PyObject *s = PyUnicode_FromString(env_i->map_name);
+                    if (s != NULL) {
+                        PyDict_SetItemString(dict, "map_name", s);
+                        Py_DECREF(s);
+                    }
                 }
             }
-
             PyList_SetItem(list, i, dict);
         }
         // Reset logs to 0 after extracting metrics (prevents accumulation across episodes)
