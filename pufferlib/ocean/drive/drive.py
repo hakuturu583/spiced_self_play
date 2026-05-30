@@ -474,6 +474,11 @@ class Drive(pufferlib.PufferEnv):
                             self._reset_compact_replay_buffer(env_slot, scenarios_after[env_slot])
                     info.append(tagged)
         if self.tick % self.report_interval == 0:
+            # Drain per-agent accumulators into each env->log so the shared
+            # vec_log produces a per-agent population mean (every agent slot
+            # contributes one term, regardless of how many episodes it
+            # completed within the window).
+            binding.vec_prepare_log(self.c_envs)
             log = binding.vec_log(self.c_envs, self.num_agents)
             if log:
                 info.append(log)

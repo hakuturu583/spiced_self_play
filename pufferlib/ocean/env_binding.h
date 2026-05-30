@@ -705,7 +705,7 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
     // Iterates over logs one float at a time. Will break
     // horribly if Log has non-float data.
     PyObject *num_agents_arg = PyTuple_GetItem(args, 1);
-    float num_agents = (float) PyLong_AsLong(num_agents_arg);
+    (void) num_agents_arg; // Kept for caller-API compatibility; gate is now aggregate.n < 1.
     int num_keys = sizeof(Log) / sizeof(float);
 
     Env *env = vec->envs[0];
@@ -758,16 +758,15 @@ static PyObject *vec_log(PyObject *self, PyObject *args) {
 
         PyObject *dict = PyDict_New();
 
-        // Only log if we have at least num_agents worth of data
-        Env *env = vec->envs[0];
-        if (env->eval_mode) {
-            if (aggregate.n == 0) {
-                return dict;
-            }
-        } else {
-            if (aggregate.n < num_agents) {
-                return dict;
-            }
+        // Emit whenever any env has data. With Drive's per-agent prepare_log
+        // path, aggregate.n is the cross-env count of agents that contributed
+        // a window-mean (not completed-episode count), so the meaningful gate
+        // is "at least one contribution." Other ocean envs that don't run
+        // prepare_log retain completed-episode-count semantics and now emit
+        // smaller batches more often — the Python-side mean_and_log
+        // (pufferl.py) re-averages across emissions in its rate-limit window.
+        if (aggregate.n < 1) {
+            return dict;
         }
 
         // Got enough data. Reset logs and return metrics
