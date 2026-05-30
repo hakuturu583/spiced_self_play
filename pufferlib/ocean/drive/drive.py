@@ -74,7 +74,7 @@ class Drive(pufferlib.PufferEnv):
         init_step=0,
         eval_mode=0,
         num_eval_scenarios=16,
-        log_ema_alpha=0.95,
+        log_ema_alpha=0.707,
         init_mode="create_all_valid",
         control_mode="control_vehicles",
         map_dir=None,

@@ -84,8 +84,7 @@ def test_steady_state_n_equals_num_agents():
 
     assert last_log is not None, "Expected at least one emission across 4 scenarios"
     assert last_log["n"] == NUM_AGENTS, (
-        f"Expected steady-state n={NUM_AGENTS}, got n={last_log['n']} "
-        "(some agents missing from the population mean)"
+        f"Expected steady-state n={NUM_AGENTS}, got n={last_log['n']} (some agents missing from the population mean)"
     )
 
     env.close()
