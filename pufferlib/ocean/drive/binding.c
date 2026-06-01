@@ -1968,6 +1968,7 @@ static int my_init(Env *env, PyObject *args, PyObject *kwargs) {
         env->num_target_waypoints = MAX_TARGET_WAYPOINTS;
     }
     env->target_type = (int) unpack(kwargs, "target_type");
+    env->goal_on_lane = (int) unpack(kwargs, "goal_on_lane");
     env->obs_slots_boundary_n = (int) unpack(kwargs, "obs_slots_boundary_n");
     env->obs_slots_lane_n = (int) unpack(kwargs, "obs_slots_lane_n");
     env->obs_slots_partners_n = (int) unpack(kwargs, "obs_slots_partners_n");
@@ -2028,6 +2029,7 @@ static int my_completed_episode_to_dict(PyObject *dict, Env *env, CompletedEpiso
     assign_to_dict(dict, "red_light_violation_rate", summary->red_light_violation_rate);
     assign_to_dict(dict, "num_goals_reached", summary->num_goals_reached);
     assign_to_dict(dict, "score", summary->score);
+    assign_to_dict(dict, "dnf_rate", summary->dnf_rate);
     assign_to_dict(dict, "total_distance_travelled", summary->total_distance_travelled);
     assign_to_dict(dict, "total_infractions", summary->total_infractions);
 
