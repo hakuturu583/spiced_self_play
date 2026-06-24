@@ -164,13 +164,17 @@ pufferlib/ocean/impulse_wars/benchmark/
 # Ignore data files
 data/
 data_utils/carla/opendrive/
-pufferlib/resources/drive/binaries/
-pufferlib/resources/drive/binaries/training/
-pufferlib/resources/drive/binaries/validation/
+pufferlib/resources/drive/binaries/*
+pufferlib/resources/drive/binaries/training/*
+pufferlib/resources/drive/binaries/validation/*
 
 # But keep map_000.bin for the training test
 !pufferlib/resources/drive/binaries/map_000.bin
+!pufferlib/resources/drive/binaries/training/
 !pufferlib/resources/drive/binaries/training/map_000.bin
+!pufferlib/resources/drive/binaries/shinjuku_clipgt/
+pufferlib/resources/drive/binaries/shinjuku_clipgt/*
+!pufferlib/resources/drive/binaries/shinjuku_clipgt/map_000.bin
 pufferlib/resources/drive/sanity/sanity_binaries/
 
 # Compiled drive binary in root

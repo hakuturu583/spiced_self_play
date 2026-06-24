@@ -2,6 +2,7 @@
 """Build a PufferDrive self-play map from CARLA Town07 OpenDRIVE."""
 
 import argparse
+import hashlib
 import json
 import math
 import struct
@@ -313,6 +314,137 @@ def load_road_json_elements(road_json_path):
     return elements
 
 
+def require_pyarrow():
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise RuntimeError("CLIPGT parquet input requires pyarrow. Install pyarrow to use --clipgt-dir.") from exc
+    return pq
+
+
+def clipgt_payload_id(row):
+    key = row.get("key") or {}
+    map_id = key.get("map_id")
+    if map_id is None:
+        return None
+    try:
+        return int(map_id)
+    except (TypeError, ValueError):
+        digest = hashlib.sha1(str(map_id).encode("utf-8")).digest()
+        return int.from_bytes(digest[:4], "little") & 0x7FFFFFFF
+
+
+def clipgt_points(points):
+    out = []
+    for point in points or []:
+        out.append(
+            {
+                "x": float(point.get("x", 0.0)),
+                "y": float(point.get("y", 0.0)),
+                "z": float(point.get("z", 0.0)),
+            }
+        )
+    return dedupe_points(out)
+
+
+def centerline_from_rails(left_rail, right_rail, sample_spacing):
+    left = clipgt_points(left_rail)
+    right = clipgt_points(right_rail)
+    if len(left) < 2 or len(right) < 2:
+        return []
+
+    left_length = polyline_length(left)
+    right_length = polyline_length(right)
+    length = max(left_length, right_length)
+    count = max(2, int(math.ceil(length / sample_spacing)) + 1)
+    center = []
+    for idx in range(count):
+        distance_along = length * idx / (count - 1)
+        lpt = point_at_distance(left, min(distance_along, left_length))
+        rpt = point_at_distance(right, min(distance_along, right_length))
+        center.append(
+            {
+                "x": 0.5 * (lpt["x"] + rpt["x"]),
+                "y": 0.5 * (lpt["y"] + rpt["y"]),
+                "z": 0.5 * (lpt.get("z", 0.0) + rpt.get("z", 0.0)),
+            }
+        )
+    return dedupe_points(center)
+
+
+def load_clipgt_elements(clipgt_dir, sample_spacing=2.0):
+    pq = require_pyarrow()
+    clipgt_dir = Path(clipgt_dir)
+    if not clipgt_dir.is_dir():
+        raise FileNotFoundError(f"CLIPGT directory not found: {clipgt_dir}")
+
+    elements = []
+    next_id = 0
+
+    lane_path = clipgt_dir / "lane.parquet"
+    if lane_path.exists():
+        for row in pq.read_table(lane_path).to_pylist():
+            lane = row.get("lane") or {}
+            points = centerline_from_rails(lane.get("left_rail"), lane.get("right_rail"), sample_spacing)
+            if len(points) < 2 or polyline_length(points) < MIN_MAP_ELEMENT_LENGTH:
+                continue
+            elem_id = clipgt_payload_id(row)
+            if elem_id is None:
+                elem_id = next_id
+            elements.append(
+                {
+                    "id": elem_id,
+                    "type": "lane",
+                    "road_id": elem_id,
+                    "lane_id": elem_id,
+                    "points": points,
+                }
+            )
+            next_id += 1
+
+    lane_line_path = clipgt_dir / "lane_line.parquet"
+    if lane_line_path.exists():
+        for row in pq.read_table(lane_line_path).to_pylist():
+            points = clipgt_points((row.get("lane_line") or {}).get("line_rail"))
+            if len(points) < 2 or polyline_length(points) < MIN_MAP_ELEMENT_LENGTH:
+                continue
+            elem_id = clipgt_payload_id(row)
+            if elem_id is None:
+                elem_id = next_id
+            elements.append(
+                {
+                    "id": elem_id,
+                    "type": "road_line",
+                    "road_id": elem_id,
+                    "lane_id": 0,
+                    "points": points,
+                }
+            )
+            next_id += 1
+
+    road_boundary_path = clipgt_dir / "road_boundary.parquet"
+    if road_boundary_path.exists():
+        for row in pq.read_table(road_boundary_path).to_pylist():
+            points = clipgt_points((row.get("road_boundary") or {}).get("location"))
+            if len(points) < 2 or polyline_length(points) < MIN_MAP_ELEMENT_LENGTH:
+                continue
+            elem_id = clipgt_payload_id(row)
+            if elem_id is None:
+                elem_id = next_id
+            elements.append(
+                {
+                    "id": elem_id,
+                    "type": "road_edge",
+                    "road_id": elem_id,
+                    "lane_id": 0,
+                    "points": points,
+                }
+            )
+            next_id += 1
+
+    return elements
+
+
 def build_lane_surface(map_elements, buffer_distance=LANE_SURFACE_BUFFER):
     lane_polygons = []
     for elem in map_elements:
@@ -527,7 +659,7 @@ def trajectory_from_lane(points, speed, dt):
     return positions, headings
 
 
-def build_map_data(map_elements, num_agents, speed, dt):
+def build_map_data(map_elements, num_agents, speed, dt, scenario_id="Town07", metadata_source="CARLA Town07 OpenDRIVE"):
     roads = []
     lanes = [
         elem
@@ -573,14 +705,14 @@ def build_map_data(map_elements, num_agents, speed, dt):
         )
 
     return {
-        "scenario_id": "Town07",
+        "scenario_id": scenario_id,
         "objects": objects,
         "roads": roads,
         "tl_states": [],
         "metadata": {
             "sdc_track_index": -1,
             "tracks_to_predict": [{"track_index": idx} for idx in range(len(objects))],
-            "source": "CARLA Town07 OpenDRIVE",
+            "source": metadata_source,
         },
     }
 
@@ -699,6 +831,8 @@ def main():
     parser.add_argument("--xodr", type=Path, default=Path("data_utils/carla/opendrive/Town07.xodr"))
     parser.add_argument("--xodr-url", default=DEFAULT_TOWN07_URL)
     parser.add_argument("--road-json", type=Path, default=DEFAULT_ROAD_JSON)
+    parser.add_argument("--clipgt-dir", type=Path)
+    parser.add_argument("--scenario-id", default="Town07")
     parser.add_argument("--no-road-json", action="store_true")
     parser.add_argument("--no-xodr-road-line-supplement", action="store_true")
     parser.add_argument("--output-dir", type=Path, default=Path("pufferlib/resources/drive/binaries/town07_selfplay"))
@@ -709,27 +843,45 @@ def main():
     parser.add_argument("--dt", type=float, default=0.1)
     args = parser.parse_args()
 
-    ensure_xodr(args.xodr, args.xodr_url)
-    if not args.no_road_json and args.road_json.exists():
+    if args.clipgt_dir:
+        map_elements = load_clipgt_elements(args.clipgt_dir, sample_spacing=args.sample_spacing)
+        geometry_source = str(args.clipgt_dir)
+        supplemented_road_lines = 0
+        preserve_input_road_edges = True
+    elif not args.no_road_json and args.road_json.exists():
+        ensure_xodr(args.xodr, args.xodr_url)
         map_elements = load_road_json_elements(args.road_json)
         geometry_source = str(args.road_json)
         supplemented_road_lines = 0
+        preserve_input_road_edges = False
         if not args.no_xodr_road_line_supplement:
             xodr_elements = opendrive_map_elements(args.xodr, args.sample_spacing)
             supplemented_road_lines = supplement_xodr_road_lines(map_elements, xodr_elements)
     else:
+        ensure_xodr(args.xodr, args.xodr_url)
         map_elements = opendrive_map_elements(args.xodr, args.sample_spacing)
         geometry_source = str(args.xodr)
         supplemented_road_lines = 0
+        preserve_input_road_edges = False
 
     lane_surface = build_lane_surface(map_elements)
     derived_road_edges = road_edges_from_lane_surface(lane_surface)
-    map_elements = [elem for elem in map_elements if elem["type"] != "road_edge"] + derived_road_edges
+    if preserve_input_road_edges and any(elem["type"] == "road_edge" for elem in map_elements):
+        derived_road_edges = []
+    else:
+        map_elements = [elem for elem in map_elements if elem["type"] != "road_edge"] + derived_road_edges
     lanes = [elem for elem in map_elements if elem["type"] == "lane"]
     if not lanes:
         raise RuntimeError(f"No driving lanes parsed from {geometry_source}")
 
-    map_data = build_map_data(map_elements, num_agents=args.num_agents, speed=args.speed, dt=args.dt)
+    map_data = build_map_data(
+        map_elements,
+        num_agents=args.num_agents,
+        speed=args.speed,
+        dt=args.dt,
+        scenario_id=args.scenario_id,
+        metadata_source=geometry_source,
+    )
     if not map_data["objects"]:
         raise RuntimeError("No training agents generated from Town07 lanes")
 

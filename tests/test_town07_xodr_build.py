@@ -4,6 +4,7 @@ from scripts.build_town07_drive_maps import (
     build_map_data,
     build_lane_surface,
     driving_lane_polylines,
+    load_clipgt_elements,
     load_road_json_elements,
     opendrive_map_elements,
     road_edges_from_lane_surface,
@@ -106,6 +107,76 @@ def test_road_json_to_drive_binary(tmp_path: Path):
 
     parsed = parse_current(output)
     assert parsed["bytes_remaining"] == 0
+    assert parsed["num_objects"] == 1
+    assert parsed["num_roads"] == 3
+    assert parsed["road_type_counts"] == {4: 1, 5: 1, 6: 1}
+
+
+def test_clipgt_to_drive_binary(tmp_path: Path):
+    pq = __import__("pytest").importorskip("pyarrow.parquet")
+    pa = __import__("pytest").importorskip("pyarrow")
+
+    clipgt_dir = tmp_path / "clipgt"
+    clipgt_dir.mkdir()
+
+    key = {
+        "clip_id": "unit",
+        "label_class_id": "lanelet2:autoware:v0",
+        "map_id": "100",
+        "map_id_version": "1",
+    }
+    lane_rows = [
+        {
+            "key": key,
+            "lane": {
+                "left_rail": [{"x": 0.0, "y": 1.0, "z": 0.0}, {"x": 20.0, "y": 1.0, "z": 0.0}],
+                "right_rail": [{"x": 0.0, "y": -1.0, "z": 0.0}, {"x": 20.0, "y": -1.0, "z": 0.0}],
+            },
+            "version": 1,
+        }
+    ]
+    lane_line_rows = [
+        {
+            "key": {**key, "map_id": "101"},
+            "lane_line": {
+                "line_rail": [{"x": 0.0, "y": 0.0, "z": 0.0}, {"x": 20.0, "y": 0.0, "z": 0.0}],
+            },
+            "version": 1,
+        }
+    ]
+    road_boundary_rows = [
+        {
+            "key": {**key, "map_id": "102"},
+            "road_boundary": {
+                "location": [{"x": 0.0, "y": -2.0, "z": 0.0}, {"x": 20.0, "y": -2.0, "z": 0.0}],
+            },
+            "version": 1,
+        }
+    ]
+
+    pq.write_table(pa.Table.from_pylist(lane_rows), clipgt_dir / "lane.parquet")
+    pq.write_table(pa.Table.from_pylist(lane_line_rows), clipgt_dir / "lane_line.parquet")
+    pq.write_table(pa.Table.from_pylist(road_boundary_rows), clipgt_dir / "road_boundary.parquet")
+
+    elements = load_clipgt_elements(clipgt_dir, sample_spacing=5.0)
+    assert [elem["type"] for elem in elements] == ["lane", "road_line", "road_edge"]
+    assert elements[0]["points"][0] == {"x": 0.0, "y": 0.0, "z": 0.0}
+    assert elements[0]["points"][-1] == {"x": 20.0, "y": 0.0, "z": 0.0}
+
+    map_data = build_map_data(
+        elements,
+        num_agents=1,
+        speed=3.0,
+        dt=0.1,
+        scenario_id="Shinjuku",
+        metadata_source=str(clipgt_dir),
+    )
+    output = tmp_path / "map_000.bin"
+    save_map_binary(map_data, output, unique_map_id=0, dt=0.1)
+
+    parsed = parse_current(output)
+    assert parsed["bytes_remaining"] == 0
+    assert parsed["scenario_id"] == "Shinjuku"
     assert parsed["num_objects"] == 1
     assert parsed["num_roads"] == 3
     assert parsed["road_type_counts"] == {4: 1, 5: 1, 6: 1}
