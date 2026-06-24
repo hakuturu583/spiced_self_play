@@ -129,8 +129,8 @@ def test_clipgt_to_drive_binary(tmp_path: Path):
         {
             "key": key,
             "lane": {
-                "left_rail": [{"x": 0.0, "y": 1.0, "z": 0.0}, {"x": 20.0, "y": 1.0, "z": 0.0}],
-                "right_rail": [{"x": 0.0, "y": -1.0, "z": 0.0}, {"x": 20.0, "y": -1.0, "z": 0.0}],
+                "left_rail": [{"x": 0.0, "y": 1.0, "z": 10.0}, {"x": 20.0, "y": 1.0, "z": 12.0}],
+                "right_rail": [{"x": 0.0, "y": -1.0, "z": 10.0}, {"x": 20.0, "y": -1.0, "z": 12.0}],
             },
             "version": 1,
         }
@@ -160,8 +160,8 @@ def test_clipgt_to_drive_binary(tmp_path: Path):
 
     elements = load_clipgt_elements(clipgt_dir, sample_spacing=5.0)
     assert [elem["type"] for elem in elements] == ["lane", "road_line", "road_edge"]
-    assert elements[0]["points"][0] == {"x": 0.0, "y": 0.0, "z": 0.0}
-    assert elements[0]["points"][-1] == {"x": 20.0, "y": 0.0, "z": 0.0}
+    assert elements[0]["points"][0] == {"x": 0.0, "y": 0.0, "z": 10.0}
+    assert elements[0]["points"][-1] == {"x": 20.0, "y": 0.0, "z": 12.0}
 
     map_data = build_map_data(
         elements,
@@ -171,6 +171,9 @@ def test_clipgt_to_drive_binary(tmp_path: Path):
         scenario_id="Shinjuku",
         metadata_source=str(clipgt_dir),
     )
+    assert 10.9 < map_data["objects"][0]["position"][0]["z"] < 11.1
+    assert map_data["objects"][0]["goalPosition"]["z"] > 10.9
+
     output = tmp_path / "map_000.bin"
     save_map_binary(map_data, output, unique_map_id=0, dt=0.1)
 

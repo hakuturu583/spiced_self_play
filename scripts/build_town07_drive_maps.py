@@ -654,7 +654,7 @@ def trajectory_from_lane(points, speed, dt):
     for step in range(TRAJECTORY_LENGTH):
         pos = point_at_distance(points, start + speed * dt * step)
         nxt = point_at_distance(points, start + speed * dt * step + 0.5)
-        positions.append({"x": pos["x"], "y": pos["y"], "z": 0.9})
+        positions.append({"x": pos["x"], "y": pos["y"], "z": pos.get("z", 0.0) + 0.9})
         headings.append(heading_between(pos, nxt))
     return positions, headings
 
@@ -699,7 +699,7 @@ def build_map_data(map_elements, num_agents, speed, dt, scenario_id="Town07", me
                 "width": 2.0,
                 "length": 4.7,
                 "height": 1.8,
-                "goalPosition": {"x": goal["x"], "y": goal["y"], "z": 0.9},
+                "goalPosition": {"x": goal["x"], "y": goal["y"], "z": goal.get("z", 0.0) + 0.9},
                 "mark_as_expert": 0,
             }
         )

@@ -103,9 +103,11 @@
 // gridmap, diagonal poly-lines -> sqrt(2), include diagonal ends -> 2
 #define GRID_CELL_SIZE 5.0f
 #define MAX_ENTITIES_PER_CELL 30
+#define ROAD_LAYER_Z_THRESHOLD 3.0f
 
 // Observation constants
 #define MAX_ROAD_SEGMENT_OBSERVATIONS 128
+#define MAX_ROAD_SEGMENT_CANDIDATES 2048
 
 // Maximum number of agents per scene
 #ifndef MAX_AGENTS
@@ -1112,6 +1114,93 @@ int get_neighbor_cache_entities(Drive *env, int cell_idx, GridMapEntity *entitie
     return count;
 }
 
+static inline float segment_z_at_t(const Entity *road, int geometry_idx, float t) {
+    if (road->traj_z == NULL || geometry_idx < 0 || geometry_idx + 1 >= road->array_size) {
+        return 0.0f;
+    }
+    t = clip(t, 0.0f, 1.0f);
+    return road->traj_z[geometry_idx] + (road->traj_z[geometry_idx + 1] - road->traj_z[geometry_idx]) * t;
+}
+
+static inline float point_segment_t_2d(float px, float py, float ax, float ay, float bx, float by) {
+    float vx = bx - ax;
+    float vy = by - ay;
+    float wx = px - ax;
+    float wy = py - ay;
+    float denom = vx * vx + vy * vy;
+    if (denom <= 1e-8f) {
+        return 0.0f;
+    }
+    return clip((wx * vx + wy * vy) / denom, 0.0f, 1.0f);
+}
+
+static inline float point_segment_distance_sq_2d(float px, float py, float ax, float ay, float bx, float by, float *t_out) {
+    float t = point_segment_t_2d(px, py, ax, ay, bx, by);
+    if (t_out != NULL) {
+        *t_out = t;
+    }
+    float cx = ax + (bx - ax) * t;
+    float cy = ay + (by - ay) * t;
+    float dx = px - cx;
+    float dy = py - cy;
+    return dx * dx + dy * dy;
+}
+
+static inline int road_segment_matches_agent_layer(const Entity *agent, const Entity *road, int geometry_idx) {
+    if (road->traj_z == NULL || geometry_idx < 0 || geometry_idx + 1 >= road->array_size) {
+        return 1;
+    }
+    float ax = road->traj_x[geometry_idx];
+    float ay = road->traj_y[geometry_idx];
+    float bx = road->traj_x[geometry_idx + 1];
+    float by = road->traj_y[geometry_idx + 1];
+    float t = point_segment_t_2d(agent->x, agent->y, ax, ay, bx, by);
+    float road_z = segment_z_at_t(road, geometry_idx, t);
+    return fabsf(agent->z - road_z) <= ROAD_LAYER_Z_THRESHOLD;
+}
+
+void snap_agent_z_to_nearest_lane(Drive *env, int agent_idx) {
+    Entity *agent = &env->entities[agent_idx];
+    if (agent->removed || agent->x == INVALID_POSITION || agent->type > CYCLIST) {
+        return;
+    }
+
+    GridMapEntity candidates[MAX_ROAD_SEGMENT_CANDIDATES];
+    int grid_idx = getGridIndex(env, agent->x, agent->y);
+    int list_size = get_neighbor_cache_entities(env, grid_idx, candidates, MAX_ROAD_SEGMENT_CANDIDATES);
+    float best_dist_sq = 1e30f;
+    float best_z = agent->z;
+    for (int i = 0; i < list_size; i++) {
+        int entity_idx = candidates[i].entity_idx;
+        int geometry_idx = candidates[i].geometry_idx;
+        if (entity_idx < env->num_objects || entity_idx >= env->num_entities) {
+            continue;
+        }
+        Entity *lane = &env->entities[entity_idx];
+        if (lane->type != ROAD_LANE || geometry_idx < 0 || geometry_idx + 1 >= lane->array_size) {
+            continue;
+        }
+        if (!road_segment_matches_agent_layer(agent, lane, geometry_idx)) {
+            continue;
+        }
+
+        float t = 0.0f;
+        float dist_sq = point_segment_distance_sq_2d(
+            agent->x, agent->y, lane->traj_x[geometry_idx], lane->traj_y[geometry_idx],
+            lane->traj_x[geometry_idx + 1], lane->traj_y[geometry_idx + 1], &t);
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best_z = segment_z_at_t(lane, geometry_idx, t) + agent->height * 0.5f;
+        }
+    }
+
+    if (best_dist_sq < 100.0f) {
+        float prev_z = agent->z;
+        agent->z = best_z;
+        agent->vz = env->dt > 0.0f ? (best_z - prev_z) / env->dt : 0.0f;
+    }
+}
+
 void set_means(Drive *env) {
     float mean_x = 0.0f;
     float mean_y = 0.0f;
@@ -1407,6 +1496,9 @@ void compute_agent_metrics(Drive *env, int agent_idx) {
         // Check for offroad collision with road edges (only for vehicles and cyclists)
         if (entity->type == ROAD_EDGE && agent->type != PEDESTRIAN) {
             int geometry_idx = entity_list[i].geometry_idx;
+            if (!road_segment_matches_agent_layer(agent, entity, geometry_idx)) {
+                continue;
+            }
             float start[2] = {entity->traj_x[geometry_idx], entity->traj_y[geometry_idx]};
             float end[2] = {entity->traj_x[geometry_idx + 1], entity->traj_y[geometry_idx + 1]};
             for (int k = 0; k < 4; k++) { // Check each edge of the bounding box
@@ -2336,12 +2428,13 @@ void compute_observations(Drive *env) {
         memset(&obs[obs_idx], 0, remaining_partner_obs * sizeof(float));
         obs_idx += remaining_partner_obs;
         // map observations
-        GridMapEntity entity_list[MAX_ENTITIES_PER_CELL * 25];
+        GridMapEntity entity_list[MAX_ROAD_SEGMENT_CANDIDATES];
         int grid_idx = getGridIndex(env, ego_entity->x, ego_entity->y);
 
-        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_OBSERVATIONS);
+        int list_size = get_neighbor_cache_entities(env, grid_idx, entity_list, MAX_ROAD_SEGMENT_CANDIDATES);
+        int road_obs_seen = 0;
 
-        for (int k = 0; k < list_size; k++) {
+        for (int k = 0; k < list_size && road_obs_seen < MAX_ROAD_SEGMENT_OBSERVATIONS; k++) {
             int entity_idx = entity_list[k].entity_idx;
             int geometry_idx = entity_list[k].geometry_idx;
 
@@ -2354,9 +2447,12 @@ void compute_observations(Drive *env) {
             Entity *entity = &env->entities[entity_idx];
 
             // Validate geometry_idx before accessing
-            if (geometry_idx < 0 || geometry_idx >= entity->array_size) {
+            if (geometry_idx < 0 || geometry_idx + 1 >= entity->array_size) {
                 printf("ERROR: Invalid geometry_idx %d for entity %d (max: %d)\n", geometry_idx, entity_idx,
                        entity->array_size - 1);
+                continue;
+            }
+            if (!road_segment_matches_agent_layer(ego_entity, entity, geometry_idx)) {
                 continue;
             }
             float start_x = entity->traj_x[geometry_idx];
@@ -2392,8 +2488,9 @@ void compute_observations(Drive *env) {
             obs[obs_idx + 5] = sin_angle;
             obs[obs_idx + 6] = entity->type - 4.0f;
             obs_idx += 7;
+            road_obs_seen++;
         }
-        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - list_size) * 7;
+        int remaining_obs = (MAX_ROAD_SEGMENT_OBSERVATIONS - road_obs_seen) * 7;
         // Set the entire block to 0 at once
         memset(&obs[obs_idx], 0, remaining_obs * sizeof(float));
     }
@@ -2404,6 +2501,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
     Entity *agent = &env->entities[agent_idx];
     float best_x = agent->x;
     float best_y = agent->y;
+    float best_z = agent->z;
     float best_distance_error = 1e30f;
 
     // Sample points from all road lanes
@@ -2417,6 +2515,10 @@ void sample_new_goal(Drive *env, int agent_idx) {
         for (int j = 0; j < lane->array_size; j++) {
             float point_x = lane->traj_x[j];
             float point_y = lane->traj_y[j];
+            float point_z = lane->traj_z[j];
+            if (fabsf(agent->z - point_z) > ROAD_LAYER_Z_THRESHOLD) {
+                continue;
+            }
 
             // Calculate vector from agent to point
             float to_point_x = point_x - agent->x;
@@ -2436,6 +2538,7 @@ void sample_new_goal(Drive *env, int agent_idx) {
                 best_distance_error = distance_error;
                 best_x = point_x;
                 best_y = point_y;
+                best_z = point_z + agent->height * 0.5f;
             }
         }
     }
@@ -2445,10 +2548,12 @@ void sample_new_goal(Drive *env, int agent_idx) {
         int other_idx = env->active_agent_indices[(agent_idx + 1) % env->active_agent_count];
         best_x = env->entities[other_idx].init_goal_x;
         best_y = env->entities[other_idx].init_goal_y;
+        best_z = env->entities[other_idx].goal_position_z;
     }
 
     agent->goal_position_x = best_x;
     agent->goal_position_y = best_y;
+    agent->goal_position_z = best_z;
     agent->goals_sampled_this_episode += 1;
 }
 
@@ -2642,6 +2747,7 @@ void c_step(Drive *env) {
         if (env->entities[background_idx].x == INVALID_POSITION)
             continue;
         move_agent_with_controller(env, -1, background_idx);
+        snap_agent_z_to_nearest_lane(env, background_idx);
     }
 
     // Process actions for all active agents
@@ -2663,6 +2769,7 @@ void c_step(Drive *env) {
             // Apply sensor noise to policy-driven dynamics only.
             apply_dynamics_noise(env, agent_idx);
         }
+        snap_agent_z_to_nearest_lane(env, agent_idx);
     }
 
     // Compute rewards
