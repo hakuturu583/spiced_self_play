@@ -192,6 +192,10 @@ def env_creator(name="squared", *args, **kwargs):
 
     # TODO: Robust sanity / ocean imports
     name = name.replace("puffer_", "")
+    aliases = {
+        "drive_town07": "drive",
+    }
+    name = aliases.get(name, name)
     try:
         module = importlib.import_module(f"pufferlib.ocean.{name}.{name}")
         return getattr(module, MAKE_FUNCTIONS[name])

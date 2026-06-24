@@ -414,7 +414,7 @@ def rollout_policy(
 
     for _ in range(env.episode_length):
         if render_view is not None:
-            env.render(view_mode=render_view, draw_traces=draw_traces, env_id=0)
+            env.render(view_mode=render_view, draw_traces=draw_traces, env_idx=0)
 
         action = select_action(policy, obs, env, state, base_args["train"]["device"], deterministic)
         obs, _, _, truncations, infos = env.step(action)

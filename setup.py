@@ -281,7 +281,7 @@ if not NO_TRAIN:
     torch_sources = [
         "pufferlib/extensions/pufferlib.cpp",
     ]
-    if shutil.which("nvcc"):
+    if shutil.which("nvcc") and cpp_extension.CUDA_HOME is not None:
         extension = CUDAExtension
         torch_sources.append("pufferlib/extensions/cuda/pufferlib.cu")
     else:
@@ -315,6 +315,7 @@ for key, value in cfg_vars.items():
 install_requires = [
     "setuptools",
     "numpy<2.0",
+    "shapely",
     "shimmy[gym-v21]",
     "gym==0.23",
     "gymnasium==0.29.1",
@@ -334,6 +335,7 @@ if not NO_TRAIN:
         "neptune",
         "wandb",
         "matplotlib",
+        "seaborn",
         "tqdm",
     ]
 
